@@ -8,8 +8,8 @@ pipeline {
     }
 
     environment {
-        ARTIFACTORY_URL  = 'http://192.168.2.10:8082/artifactory'
-        ARTIFACTORY_REPO = 'im6ull-local'
+        ARTIFACTORY_URL  = 'http://127.0.0.1:8082/artifactory'
+        ARTIFACTORY_REPO = 'example-repo-local'
     }
 
     stages {
@@ -58,12 +58,6 @@ pipeline {
         }
 
         stage('Upload to JFrog') {
-            when {
-                expression {
-                    // 由 Jenkins 参数控制；Artifactory 未就绪时默认跳过
-                    return params.UPLOAD_TO_JFROG
-                }
-            }
             steps {
                 withCredentials([usernamePassword(
                     credentialsId: 'artifactory-admin',
