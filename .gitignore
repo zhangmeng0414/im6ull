@@ -1,0 +1,33 @@
+# 构建产物
+build/
+output/
+*.o
+*.ko
+*.a
+*.log
+
+# 编辑器/IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# 系统与临时文件
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
+
+# 第三方压缩包
+third_party/*.tar.*
+third_party/*.zip
+
+# 本地大型二进制（固件/镜像另行管理）
+*.ext4
+*.img
+
+# 外部源码树（U-Boot 完整源码不入库）
+bootloader/uboot/alientek_ubbot/
+
+# 大型文档（本地保留，不入库）
+hardware/datasheet/
