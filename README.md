@@ -173,3 +173,113 @@ ssh -i C:\Users\Administrator\.ssh\id_ed25519 root@192.168.2.50
 - `/lib/modules`、`/lib/firmware` 目前为空，OV5640（`ov5640_camera_int.ko`）与
   USB WiFi（`8188eu.ko`）模块尚未部署
 - 摄像头尚未采购；4.3 寸屏型号为 `ATK-LCD-4.3-800x480`，设备树时序与之一致，无需改屏参
+
+## CI/CD 平台（Jenkins + JFrog Artifactory）
+
+### 拓扑
+
+```
+GitHub  zhangmeng0414/im6ull
+   │  SCM 轮询 */5 * * * *（GitHub 无法回调内网，不用 webhook）
+   ▼
+Jenkins 2.580.2      192.168.2.10:8080      JDK 21
+   │  打包后 curl PUT
+   ▼
+JFrog Artifactory    192.168.2.10:8082      OSS 7.161.15
+   │  JDBC
+   ▼
+PostgreSQL 12        127.0.0.1:5432
+```
+
+### 访问信息
+
+| 服务 | 地址 | 账号 | 密码 |
+|---|---|---|---|
+| Jenkins | http://192.168.2.10:8080 | admin | im6ull2026 |
+| Artifactory | http://192.168.2.10:8082 | admin | password |
+| 产物浏览 | http://192.168.2.10:8082/artifactory/example-repo-local/im6ull/ | admin | password |
+
+### 安装形态（全部用户级，不依赖系统包）
+
+| 组件 | 路径 |
+|---|---|
+| Jenkins war | `/home/ubuntu/tools/jenkins.war`（2.580.2） |
+| JDK 21 | `/home/ubuntu/tools/jdk-21.0.13+9` |
+| Jenkins HOME | `/home/ubuntu/.jenkins` |
+| Artifactory | `/home/ubuntu/tools/artifactory-oss-7.161.15` |
+| PostgreSQL 12 | `/home/ubuntu/tools/pg/usr/lib/postgresql/12/bin` |
+| PG 数据目录 | `/home/ubuntu/pgdata` |
+
+### systemd 开机自启
+
+| Unit | 端口 | 说明 |
+|---|---|---|
+| `im6ull-pg.service` | 5432 | Type=forking，数据目录 `~/pgdata` |
+| `im6ull-jenkins.service` | 8080 | Type=simple，Restart=always |
+| `im6ull-artifactory.service` | 8081/8082 | Requires `im6ull-pg`，启动约 1–2 分钟 |
+
+```bash
+sudo systemctl status im6ull-pg im6ull-jenkins im6ull-artifactory
+sudo journalctl -u im6ull-jenkins -f
+sudo systemctl restart im6ull-artifactory
+```
+
+### Jenkins 任务 `im6ull-build`
+
+| 配置项 | 值 |
+|---|---|
+| 类型 | Pipeline（Pipeline script from SCM） |
+| 仓库 | `git@github.com:zhangmeng0414/im6ull.git` |
+| 分支 | `main` |
+| 脚本路径 | `Jenkinsfile` |
+| 触发器 | SCM 轮询 `*/5 * * * *` |
+| 构建保留 | 最近 30 次 |
+
+凭据（Manage Jenkins → Credentials → System → Global）：
+
+| ID | 类型 | 内容 |
+|---|---|---|
+| `github-deploy-key` | SSH Username with private key | `git` + `/home/ubuntu/.ssh/id_ed25519` |
+| `artifactory-admin` | Username with password | `admin` / `password` |
+
+### Jenkinsfile 流水线
+
+`Checkout` → `Inspect` → `Package` → `Upload to JFrog`
+
+- 版本号：`v$(date +%Y%m%d)-$(git rev-parse --short HEAD)`
+- 打包：`git archive` 生成 `im6ull-<ver>.tar.gz` 与 `manifest.txt`（version / commit / branch / built / jenkins build# / sha256）
+- 上传：`curl -T` 到 `example-repo-local/im6ull/<ver>/`
+- 归档：`archiveArtifacts output/**`，收尾 `deleteDir()`
+
+### Artifactory 配置
+
+| 项 | 值 |
+|---|---|
+| 数据库 | PostgreSQL 12 |
+| JDBC | `jdbc:postgresql://127.0.0.1:5432/artifactory` |
+| DB 用户 | `artifactory` / `artifactory` |
+| 配置文件 | `~/tools/artifactory-oss-7.161.15/var/etc/system.yaml` |
+| 仓库 | 内置 `example-repo-local`（OSS 版不支持 API 建仓） |
+| JVM | `-Xms512m -Xmx2g` |
+
+### 常用命令
+
+```bash
+# 手动触发构建
+java -jar ~/tools/jenkins-cli.jar -s http://192.168.2.10:8080/ \
+  -auth admin:im6ull2026 build im6ull-build -s -v
+
+# 查看产物清单
+curl -u admin:password \
+  http://192.168.2.10:8082/artifactory/api/storage/example-repo-local/im6ull
+
+# 直连数据库
+~/tools/pg/usr/lib/postgresql/12/bin/psql -h 127.0.0.1 -p 5432 -U postgres
+```
+
+### 已知限制
+
+- Artifactory OSS 免费版**不能**通过 REST API 建仓库，需在 8082 页面手动创建专用仓库（如 `im6ull-local`）
+- Artifactory 重启后约 1–2 分钟才返回 200，期间 8082 会 502，属正常初始化
+- Jenkins 插件走官方源，下载慢；紧急时可手工下载 `.jpi` 放入 `~/.jenkins/plugins`
+- 管理员密码固定为 `im6ull2026`，由 `~/.jenkins/init.groovy.d/01-security.groovy` 在首次启动创建；初始随机密码文件已清理
